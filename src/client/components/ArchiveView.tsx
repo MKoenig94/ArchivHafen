@@ -21,6 +21,7 @@ import type { Account, Folder, MessageDetail, MessagePage, MessageSummary } from
 import { api } from "../lib/api";
 import { formatBytes, formatCount, formatDate, formatMessageDate } from "../lib/format";
 import { mergeMessagePages } from "../lib/message-pages";
+import { ArchiveFolderTree } from "./ArchiveFolderTree";
 
 const MESSAGE_PAGE_SIZE = 35;
 
@@ -43,6 +44,7 @@ export function ArchiveView({ accounts, onNotify }: {
   const [selectedForTrash, setSelectedForTrash] = useState<Set<string>>(() => new Set());
   const [trashing, setTrashing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [folderError, setFolderError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -68,15 +70,37 @@ export function ArchiveView({ accounts, onNotify }: {
     return () => window.clearTimeout(timer);
   }, [queryInput]);
 
+  const folderRevision = useMemo(() => accounts.map((account) => [
+    account.id,
+    account.messageCount,
+    account.lastSyncAt,
+    account.status,
+  ].join(":")).join("|"), [accounts]);
+  const completedSyncRevision = useMemo(
+    () => accounts.map((account) => `${account.id}:${account.lastSyncAt ?? ""}`).join("|"),
+    [accounts],
+  );
+  const previousSyncRevision = useRef(completedSyncRevision);
+
   useEffect(() => {
     let active = true;
-    api.folders(accountId || undefined).then((result) => {
-      if (active) setFolders(result);
+    api.folders().then((result) => {
+      if (active) {
+        setFolders(result);
+        setFolderError(null);
+      }
     }).catch((caught) => {
-      if (active) setError(caught instanceof Error ? caught.message : "Ordner konnten nicht geladen werden.");
+      if (active) setFolderError(caught instanceof Error ? caught.message : "Ordner konnten nicht geladen werden.");
     });
     return () => { active = false; };
-  }, [accountId]);
+  }, [folderRevision]);
+
+  useEffect(() => {
+    if (previousSyncRevision.current === completedSyncRevision) return;
+    if (selectedId) return;
+    previousSyncRevision.current = completedSyncRevision;
+    if (page === 1) setRequestVersion((value) => value + 1);
+  }, [completedSyncRevision, page, selectedId]);
 
   useEffect(() => {
     let active = true;
@@ -123,6 +147,26 @@ export function ArchiveView({ accounts, onNotify }: {
     setSelectedForTrash(new Set());
   };
 
+  const selectFolder = (folder: Folder) => {
+    setAccountId(folder.accountId);
+    setFolderId(folder.id);
+    setPage(1);
+    setSelectedId(null);
+    setSelectedForTrash(new Set());
+  };
+
+  const selectFolderValue = (value: string) => {
+    const folder = folders.find((item) => item.id === value);
+    if (folder) {
+      selectFolder(folder);
+      return;
+    }
+    setFolderId("");
+    setPage(1);
+    setSelectedId(null);
+    setSelectedForTrash(new Set());
+  };
+
   const selected = useMemo(
     () => messages?.items.find((message) => message.id === selectedId) ?? null,
     [messages, selectedId],
@@ -140,6 +184,9 @@ export function ArchiveView({ accounts, onNotify }: {
   ) ?? [];
   const allLoadedSelected = selectableMessages.length > 0
     && selectableMessages.every((message) => selectedForTrash.has(message.id));
+  const folderOptions = accountId
+    ? folders.filter((folder) => folder.accountId === accountId)
+    : folders;
 
   const loadNextPage = () => {
     if (!messages || !hasMore || loading || loadingMoreRef.current || error) return;
@@ -262,9 +309,9 @@ export function ArchiveView({ accounts, onNotify }: {
         </div>
         <div className="filter-select-wrap">
           <Inbox size={16} />
-          <select value={folderId} onChange={(event) => { setFolderId(event.target.value); setPage(1); setSelectedId(null); setSelectedForTrash(new Set()); }} aria-label="Ordner filtern">
+          <select value={folderId} onChange={(event) => selectFolderValue(event.target.value)} aria-label="Ordner filtern">
             <option value="">Alle Ordner</option>
-            {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name} ({folder.messageCount})</option>)}
+            {folderOptions.map((folder) => <option key={folder.id} value={folder.id}>{folder.path} ({folder.messageCount})</option>)}
           </select>
           <ChevronDown size={15} />
         </div>
@@ -277,6 +324,16 @@ export function ArchiveView({ accounts, onNotify }: {
       </section>
 
       <section className={`archive-workspace ${selectedId ? "archive-workspace--reader" : ""}`}>
+        <ArchiveFolderTree
+          accounts={accounts}
+          folders={folders}
+          accountId={accountId}
+          folderId={folderId}
+          error={folderError}
+          onSelectAll={() => selectAccount("")}
+          onSelectAccount={selectAccount}
+          onSelectFolder={selectFolder}
+        />
         <div className="message-list-panel">
           <div className={`list-caption ${selectedForTrash.size ? "list-caption--selected" : ""}`}>
             <label className="select-all-control">

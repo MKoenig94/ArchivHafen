@@ -21,7 +21,7 @@ FROM node:${NODE_VERSION} AS runtime
 
 LABEL org.opencontainers.image.title="Archiv Hafen für Linux" \
       org.opencontainers.image.description="Lokale IMAP-Mailarchivierung mit SQLite und EML-Originalen" \
-      org.opencontainers.image.version="0.2.0"
+      org.opencontainers.image.version="0.3.0"
 
 ENV NODE_ENV=production \
     ARCHIVHAFEN_HOST=0.0.0.0 \

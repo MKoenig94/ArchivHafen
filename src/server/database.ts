@@ -102,6 +102,8 @@ export class StoreDatabase {
         path TEXT NOT NULL,
         name TEXT NOT NULL,
         special_use TEXT,
+        delimiter TEXT,
+        parent_path TEXT,
         uid_validity TEXT,
         last_uid INTEGER NOT NULL DEFAULT 0,
         message_count INTEGER NOT NULL DEFAULT 0,
@@ -183,6 +185,13 @@ export class StoreDatabase {
     const messageColumns = this.connection.prepare("PRAGMA table_info(messages)").all() as Row[];
     if (!messageColumns.some((column) => String(column.name) === "remote_deleted_at")) {
       this.connection.exec("ALTER TABLE messages ADD COLUMN remote_deleted_at TEXT");
+    }
+    const folderColumns = this.connection.prepare("PRAGMA table_info(folders)").all() as Row[];
+    if (!folderColumns.some((column) => String(column.name) === "delimiter")) {
+      this.connection.exec("ALTER TABLE folders ADD COLUMN delimiter TEXT");
+    }
+    if (!folderColumns.some((column) => String(column.name) === "parent_path")) {
+      this.connection.exec("ALTER TABLE folders ADD COLUMN parent_path TEXT");
     }
     this.connection.exec(`
       CREATE INDEX IF NOT EXISTS messages_remote_deleted_idx ON messages(remote_deleted_at);
@@ -313,17 +322,29 @@ export class StoreDatabase {
     path: string;
     name: string;
     specialUse: string | null;
+    delimiter?: string | null;
+    parentPath?: string | null;
   }): Folder {
     const existing = this.connection.prepare(
       "SELECT id FROM folders WHERE account_id = ? AND path = ?",
     ).get(input.accountId, input.path) as Row | undefined;
     const id = existing ? String(existing.id) : randomUUID();
     this.connection.prepare(`
-      INSERT INTO folders (id, account_id, path, name, special_use)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO folders (id, account_id, path, name, special_use, delimiter, parent_path)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(account_id, path) DO UPDATE SET
-        name = excluded.name, special_use = excluded.special_use
-    `).run(id, input.accountId, input.path, input.name, input.specialUse);
+        name = excluded.name, special_use = excluded.special_use,
+        delimiter = COALESCE(excluded.delimiter, folders.delimiter),
+        parent_path = COALESCE(excluded.parent_path, folders.parent_path)
+    `).run(
+      id,
+      input.accountId,
+      input.path,
+      input.name,
+      input.specialUse,
+      input.delimiter ?? null,
+      input.parentPath ?? null,
+    );
     return this.getFolder(id)!;
   }
 
@@ -700,6 +721,8 @@ function mapFolder(row: Row): Folder {
     path: String(row.path),
     name: String(row.name),
     specialUse: row.special_use === null ? null : String(row.special_use),
+    delimiter: row.delimiter === null || row.delimiter === undefined ? null : String(row.delimiter),
+    parentPath: row.parent_path === null || row.parent_path === undefined ? null : String(row.parent_path),
     messageCount: Number(row.archived_count ?? 0),
     lastSyncAt: row.last_sync_at === null ? null : String(row.last_sync_at),
   };

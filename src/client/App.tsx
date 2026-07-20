@@ -45,9 +45,18 @@ export function App() {
 
   const hasActiveJobs = jobs.some((job) => job.status === "queued" || job.status === "running");
   useEffect(() => {
-    if (!hasActiveJobs) return;
-    const timer = window.setInterval(() => void refresh(), 1_500);
-    return () => window.clearInterval(timer);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    const timer = window.setInterval(refreshWhenVisible, hasActiveJobs ? 1_500 : 10_000);
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [hasActiveJobs, refresh]);
 
   useEffect(() => {

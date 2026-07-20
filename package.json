@@ -1,6 +1,6 @@
 {
   "name": "archivhafen",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Archiv Hafen – lokale, selbst gehostete Mailarchivierung für Linux",

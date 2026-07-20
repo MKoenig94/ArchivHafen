@@ -118,6 +118,8 @@ export class SyncManager {
           path: listedFolder.path,
           name: listedFolder.name || listedFolder.path,
           specialUse: listedFolder.specialUse ?? null,
+          delimiter: listedFolder.delimiter || null,
+          parentPath: listedFolder.parentPath || null,
         });
         const lock = await client.getMailboxLock(listedFolder.path, {
           description: `Archiv Hafen sync ${jobId}`,
@@ -229,7 +231,7 @@ export function createImapClient(input: {
     maxLiteralSize: 150 * 1024 * 1024,
     clientInfo: {
       name: "Archiv Hafen",
-      version: "0.2.0",
+      version: "0.3.0",
       vendor: "Local-first",
     },
   });

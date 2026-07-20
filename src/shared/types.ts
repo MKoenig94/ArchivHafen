@@ -24,6 +24,8 @@ export interface Folder {
   path: string;
   name: string;
   specialUse: string | null;
+  delimiter: string | null;
+  parentPath: string | null;
   messageCount: number;
   lastSyncAt: string | null;
 }

@@ -11,6 +11,8 @@ Archiv Hafen ist ein lokales, selbst gehostetes E-Mail-Archiv für Linux. Es ver
 - Originale RFC-822-Nachrichten inklusive Headern und Anhängen
 - Volltextsuche über Betreff, Absender, Empfänger und Nachrichtentext
 - Filter nach Postfach, Ordner und Anhängen
+- Auf- und zuklappbare IMAP-Ordnerstruktur, gruppiert nach Postfach
+- Dynamische Ordnerzähler und automatische Aktualisierung nach Synchronisierungen
 - Einzelne oder mehrere archivierte Nachrichten im Anbieter-Postfach in den Papierkorb verschieben
 - Bereinigungsregeln für Nachrichten älter als X Tage oder von einer exakten Absenderadresse
 - Treffer-Vorschau und Bestätigung vor dem Aktivieren oder manuellen Ausführen einer Regel
@@ -106,6 +108,8 @@ Archiv Hafen verwendet die klassische IMAP-Anmeldung. Bei Gmail und iCloud muss 
 
 Beim ersten Lauf werden alle auswählbaren Ordner außer Spam und Papierkorb archiviert. Folgeläufe laden ausschließlich neue UIDs. Ändert ein Server seine UIDVALIDITY, prüft Archiv Hafen den Ordner erneut und verhindert doppelte Archivdateien über SHA-256.
 
+Im Archiv zeigt eine eigene Ordnerleiste die Hierarchie des jeweiligen IMAP-Postfachs einschließlich verschachtelter Unterordner. Ein Klick auf ein Postfach oder einen Ordner filtert die Nachrichten direkt. Während einer laufenden Synchronisierung sowie nach automatisch gestarteten Hintergrundläufen werden Ordner, Zähler und die aktuelle Nachrichtenliste ohne Neuladen aktualisiert. Angezeigt werden ausschließlich archivierte Bereiche; als Spam (`\Junk`) oder Papierkorb (`\Trash`) gekennzeichnete Ordner bleiben ausgelassen.
+
 ## Nachrichten im Anbieter-Postfach bereinigen
 
 Im Archiv kann eine Nachricht über die Leseransicht oder per Checkbox ausgewählt werden. Die Mehrfachauswahl wirkt auf alle aktuell geladenen Treffer. Vor dem Verschieben zeigt Archiv Hafen immer eine Bestätigung an. Die Nachricht wird ausschließlich in den IMAP-Papierkorb des verbundenen Anbieters verschoben und bleibt als unveränderte `.eml`-Datei im lokalen Archiv erhalten.
@@ -162,7 +166,7 @@ npm test
 npm run build
 ```
 
-Die Tests decken die authentifizierte Verschlüsselung, unveränderte EML-Ablage, Volltextindexierung, Anhangserkennung, Deduplizierung, Datenbankmigration sowie die sichere IMAP-Papierkorbverschiebung mit erhaltenem Lokalarchiv ab.
+Die Tests decken die authentifizierte Verschlüsselung, unveränderte EML-Ablage, Volltextindexierung, Anhangserkennung, Deduplizierung, IMAP-Ordnerhierarchien, Datenbankmigration sowie die sichere IMAP-Papierkorbverschiebung mit erhaltenem Lokalarchiv ab.
 
 ## Lizenz
 

@@ -21,17 +21,22 @@ describe("StoreDatabase", () => {
     previousVersion.connection.exec(`
       DROP INDEX messages_remote_deleted_idx;
       ALTER TABLE messages DROP COLUMN remote_deleted_at;
+      ALTER TABLE folders DROP COLUMN delimiter;
+      ALTER TABLE folders DROP COLUMN parent_path;
       DROP TABLE cleanup_rules;
     `);
     previousVersion.close();
 
     const migrated = new StoreDatabase(databasePath);
     const columns = migrated.connection.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
+    const folderColumns = migrated.connection.prepare("PRAGMA table_info(folders)").all() as Array<{ name: string }>;
     const rulesTable = migrated.connection.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cleanup_rules'",
     ).get() as { name: string } | undefined;
 
     expect(columns.some((column) => column.name === "remote_deleted_at")).toBe(true);
+    expect(folderColumns.some((column) => column.name === "delimiter")).toBe(true);
+    expect(folderColumns.some((column) => column.name === "parent_path")).toBe(true);
     expect(rulesTable?.name).toBe("cleanup_rules");
     expect(migrated.listCleanupRules()).toEqual([]);
     migrated.close();
