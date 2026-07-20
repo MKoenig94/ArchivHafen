@@ -1,0 +1,60 @@
+{
+  "name": "archivhafen",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Archiv Hafen – lokale, selbst gehostete Mailarchivierung für Linux",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MKoenig94/ArchivHafen.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MKoenig94/ArchivHafen/issues"
+  },
+  "homepage": "https://github.com/MKoenig94/ArchivHafen#readme",
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "tsx watch src/server/index.ts",
+    "dev:web": "vite",
+    "build": "npm run typecheck && vite build && node scripts/build-server.mjs",
+    "start": "NODE_ENV=production node dist/server/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "seed:demo": "tsx scripts/seed-demo.ts",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up --build -d",
+    "docker:logs": "docker compose logs -f archivhafen",
+    "docker:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "imapflow": "^1.0.195",
+    "lucide-react": "^0.468.0",
+    "mailparser": "^3.7.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sanitize-html": "^2.14.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/mailparser": "^3.4.5",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.3",
+    "@types/react-dom": "^19.0.2",
+    "@types/sanitize-html": "^2.13.0",
+    "@vitejs/plugin-react": "^6.0.3",
+    "concurrently": "^9.1.0",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
+  }
+}
