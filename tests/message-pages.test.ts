@@ -52,5 +52,6 @@ function message(id: string): MessageSummary {
     hasAttachments: false,
     attachmentCount: 0,
     archivedAt: "2026-07-20T10:00:00.000Z",
+    remoteDeletedAt: null,
   };
 }

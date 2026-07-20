@@ -13,6 +13,7 @@ import {
   Search,
   ShieldOff,
   SlidersHorizontal,
+  Trash2,
   UserRound,
   X,
 } from "lucide-react";
@@ -23,7 +24,10 @@ import { mergeMessagePages } from "../lib/message-pages";
 
 const MESSAGE_PAGE_SIZE = 35;
 
-export function ArchiveView({ accounts }: { accounts: Account[] }) {
+export function ArchiveView({ accounts, onNotify }: {
+  accounts: Account[];
+  onNotify: (type: "success" | "error", message: string) => void;
+}) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [messages, setMessages] = useState<MessagePage | null>(null);
   const [accountId, setAccountId] = useState("");
@@ -36,6 +40,8 @@ export function ArchiveView({ accounts }: { accounts: Account[] }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [requestVersion, setRequestVersion] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedForTrash, setSelectedForTrash] = useState<Set<string>>(() => new Set());
+  const [trashing, setTrashing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
@@ -57,6 +63,7 @@ export function ArchiveView({ accounts }: { accounts: Account[] }) {
       setQuery(queryInput.trim());
       setPage(1);
       setSelectedId(null);
+      setSelectedForTrash(new Set());
     }, 280);
     return () => window.clearTimeout(timer);
   }, [queryInput]);
@@ -113,6 +120,7 @@ export function ArchiveView({ accounts }: { accounts: Account[] }) {
     setFolderId("");
     setPage(1);
     setSelectedId(null);
+    setSelectedForTrash(new Set());
   };
 
   const selected = useMemo(
@@ -120,9 +128,18 @@ export function ArchiveView({ accounts }: { accounts: Account[] }) {
     [messages, selectedId],
   );
 
+  const connectedAccountIds = useMemo(
+    () => new Set(accounts.filter((account) => account.connected).map((account) => account.id)),
+    [accounts],
+  );
   const connected = accounts.some((account) => account.connected);
   const hasFilters = Boolean(accountId || folderId || query || attachmentsOnly);
   const hasMore = Boolean(messages && messages.page < messages.pageCount);
+  const selectableMessages = messages?.items.filter(
+    (message) => !message.remoteDeletedAt && connectedAccountIds.has(message.accountId),
+  ) ?? [];
+  const allLoadedSelected = selectableMessages.length > 0
+    && selectableMessages.every((message) => selectedForTrash.has(message.id));
 
   const loadNextPage = () => {
     if (!messages || !hasMore || loading || loadingMoreRef.current || error) return;
@@ -141,6 +158,78 @@ export function ArchiveView({ accounts }: { accounts: Account[] }) {
   const handleListScroll = (event: UIEvent<HTMLDivElement>) => {
     const list = event.currentTarget;
     if (list.scrollHeight - list.scrollTop - list.clientHeight < 420) loadNextPage();
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedForTrash((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllLoaded = () => {
+    setSelectedForTrash((current) => {
+      const next = new Set(current);
+      if (allLoadedSelected) {
+        for (const message of selectableMessages) next.delete(message.id);
+      } else {
+        for (const message of selectableMessages) next.add(message.id);
+      }
+      return next;
+    });
+  };
+
+  const moveToTrash = async (ids: string[]): Promise<string[]> => {
+    const uniqueIds = [...new Set(ids)].filter((id) => {
+      const message = messages?.items.find((item) => item.id === id);
+      return message && !message.remoteDeletedAt && connectedAccountIds.has(message.accountId);
+    });
+    if (!uniqueIds.length || trashing) return [];
+    const label = uniqueIds.length === 1 ? "diese Nachricht" : `${uniqueIds.length} Nachrichten`;
+    if (!window.confirm(
+      `Möchtest du ${label} im verbundenen Postfach in den Papierkorb verschieben?\n\nDie lokale Archivkopie bleibt vollständig erhalten.`,
+    )) return [];
+
+    setTrashing(true);
+    const movedIds: string[] = [];
+    const failures: Array<{ id: string; error: string }> = [];
+    try {
+      for (let offset = 0; offset < uniqueIds.length; offset += 100) {
+        const result = await api.trashMessages(uniqueIds.slice(offset, offset + 100));
+        movedIds.push(...result.movedIds);
+        failures.push(...result.failed);
+      }
+      if (movedIds.length) {
+        const deletedAt = new Date().toISOString();
+        const moved = new Set(movedIds);
+        setMessages((current) => current ? {
+          ...current,
+          items: current.items.map((message) => moved.has(message.id)
+            ? { ...message, remoteDeletedAt: deletedAt }
+            : message),
+        } : current);
+        setSelectedForTrash((current) => {
+          const next = new Set(current);
+          for (const id of movedIds) next.delete(id);
+          return next;
+        });
+      }
+      if (failures.length) {
+        onNotify("error", `${movedIds.length} verschoben, ${failures.length} fehlgeschlagen: ${failures[0].error}`);
+      } else {
+        onNotify("success", movedIds.length === 1
+          ? "Nachricht wurde im Postfach in den Papierkorb verschoben."
+          : `${movedIds.length} Nachrichten wurden im Postfach in den Papierkorb verschoben.`);
+      }
+      return movedIds;
+    } catch (caught) {
+      onNotify("error", caught instanceof Error ? caught.message : "Nachrichten konnten nicht verschoben werden.");
+      return movedIds;
+    } finally {
+      setTrashing(false);
+    }
   };
 
   return (
@@ -173,7 +262,7 @@ export function ArchiveView({ accounts }: { accounts: Account[] }) {
         </div>
         <div className="filter-select-wrap">
           <Inbox size={16} />
-          <select value={folderId} onChange={(event) => { setFolderId(event.target.value); setPage(1); setSelectedId(null); }} aria-label="Ordner filtern">
+          <select value={folderId} onChange={(event) => { setFolderId(event.target.value); setPage(1); setSelectedId(null); setSelectedForTrash(new Set()); }} aria-label="Ordner filtern">
             <option value="">Alle Ordner</option>
             {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name} ({folder.messageCount})</option>)}
           </select>
@@ -181,7 +270,7 @@ export function ArchiveView({ accounts }: { accounts: Account[] }) {
         </div>
         <button
           className={`filter-button ${attachmentsOnly ? "filter-button--active" : ""}`}
-          onClick={() => { setAttachmentsOnly((value) => !value); setPage(1); setSelectedId(null); }}
+          onClick={() => { setAttachmentsOnly((value) => !value); setPage(1); setSelectedId(null); setSelectedForTrash(new Set()); }}
         >
           <Paperclip size={16} /> Mit Anhang
         </button>
@@ -189,9 +278,27 @@ export function ArchiveView({ accounts }: { accounts: Account[] }) {
 
       <section className={`archive-workspace ${selectedId ? "archive-workspace--reader" : ""}`}>
         <div className="message-list-panel">
-          <div className="list-caption">
-            <span>{hasFilters ? `${formatCount(messages?.total ?? 0)} passende Nachrichten` : "Chronologisch sortiert"}</span>
-            <span><SlidersHorizontal size={14} /> Neueste zuerst</span>
+          <div className={`list-caption ${selectedForTrash.size ? "list-caption--selected" : ""}`}>
+            <label className="select-all-control">
+              <input
+                type="checkbox"
+                checked={allLoadedSelected}
+                onChange={toggleAllLoaded}
+                disabled={!selectableMessages.length || trashing}
+              />
+              <span>{selectedForTrash.size
+                ? `${selectedForTrash.size} ausgewählt`
+                : hasFilters ? `${formatCount(messages?.total ?? 0)} passende Nachrichten` : "Chronologisch sortiert"}</span>
+            </label>
+            {selectedForTrash.size ? (
+              <div className="selection-actions">
+                <button disabled={trashing} onClick={() => void moveToTrash([...selectedForTrash])}>
+                  {trashing ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}
+                  In Papierkorb
+                </button>
+                <button disabled={trashing} onClick={() => setSelectedForTrash(new Set())}>Auswahl aufheben</button>
+              </div>
+            ) : <span><SlidersHorizontal size={14} /> Neueste zuerst</span>}
           </div>
           <div
             className="message-list"
@@ -210,6 +317,9 @@ export function ArchiveView({ accounts }: { accounts: Account[] }) {
                   key={message.id}
                   message={message}
                   selected={selectedId === message.id}
+                  checked={selectedForTrash.has(message.id)}
+                  canTrash={connectedAccountIds.has(message.accountId)}
+                  onCheck={() => toggleSelected(message.id)}
                   onClick={() => setSelectedId(message.id)}
                 />
               ))
@@ -220,7 +330,7 @@ export function ArchiveView({ accounts }: { accounts: Account[] }) {
                 {connected ? <Search size={30} /> : <Inbox size={30} />}
                 <h3>{connected ? "Keine Nachrichten gefunden" : "Dein Archiv ist noch leer"}</h3>
                 <p>{connected ? "Probiere einen anderen Suchbegriff oder entferne Filter." : "Verbinde ein Postfach und starte die erste Archivierung."}</p>
-                {hasFilters && <button className="text-button" onClick={() => { setQueryInput(""); setAccountId(""); setFolderId(""); setAttachmentsOnly(false); setPage(1); setSelectedId(null); }}>Alle Filter zurücksetzen</button>}
+                {hasFilters && <button className="text-button" onClick={() => { setQueryInput(""); setAccountId(""); setFolderId(""); setAttachmentsOnly(false); setPage(1); setSelectedId(null); setSelectedForTrash(new Set()); }}>Alle Filter zurücksetzen</button>}
               </div>
             )}
           </div>
@@ -241,7 +351,13 @@ export function ArchiveView({ accounts }: { accounts: Account[] }) {
         </div>
 
         <div className="reader-panel">
-          {selected ? <MessageReader summary={selected} onClose={() => setSelectedId(null)} /> : (
+          {selected ? <MessageReader
+            summary={selected}
+            trashing={trashing}
+            canTrash={connectedAccountIds.has(selected.accountId)}
+            onTrash={async () => (await moveToTrash([selected.id])).includes(selected.id)}
+            onClose={() => setSelectedId(null)}
+          /> : (
             <div className="reader-placeholder"><div><MailOpen size={34} /></div><h3>Nachricht auswählen</h3><p>Der Inhalt wird sicher und ohne externe Bilder angezeigt.</p></div>
           )}
         </div>
@@ -250,15 +366,29 @@ export function ArchiveView({ accounts }: { accounts: Account[] }) {
   );
 }
 
-function MessageRow({ message, selected, onClick }: {
+function MessageRow({ message, selected, checked, canTrash, onCheck, onClick }: {
   message: MessageSummary;
   selected: boolean;
+  checked: boolean;
+  canTrash: boolean;
+  onCheck: () => void;
   onClick: () => void;
 }) {
+  const unavailable = Boolean(message.remoteDeletedAt) || !canTrash;
   return (
-    <button className={`message-row ${selected ? "message-row--selected" : ""}`} onClick={onClick}>
+    <div className={`message-row ${selected ? "message-row--selected" : ""} ${message.remoteDeletedAt ? "message-row--remote-deleted" : ""}`}>
       <span className="message-account-line" style={{ backgroundColor: message.accountColor }} />
-      <span className="message-row-main">
+      <label className="message-checkbox" title={message.remoteDeletedAt ? "Bereits in den Papierkorb verschoben" : canTrash ? "Nachricht auswählen" : "Postfach ist nicht verbunden"}>
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={unavailable}
+          onChange={onCheck}
+          aria-label={`${message.subject} auswählen`}
+        />
+      </label>
+      <button className="message-row-open" onClick={onClick}>
+        <span className="message-row-main">
         <span className="message-row-top">
           <strong>{message.sender.name || message.sender.address || "Unbekannt"}</strong>
           <time>{formatMessageDate(message.sentAt ?? message.receivedAt)}</time>
@@ -268,14 +398,22 @@ function MessageRow({ message, selected, onClick }: {
         <span className="message-row-footer">
           <span className="folder-chip">{message.folder}</span>
           <span className="account-chip"><i style={{ backgroundColor: message.accountColor }} />{message.accountName}</span>
+          {message.remoteDeletedAt && <span className="remote-deleted-chip"><Trash2 size={12} /> Im Papierkorb</span>}
           {message.hasAttachments && <span className="attachment-count"><Paperclip size={13} /> {message.attachmentCount}</span>}
         </span>
-      </span>
-    </button>
+        </span>
+      </button>
+    </div>
   );
 }
 
-function MessageReader({ summary, onClose }: { summary: MessageSummary; onClose: () => void }) {
+function MessageReader({ summary, trashing, canTrash, onTrash, onClose }: {
+  summary: MessageSummary;
+  trashing: boolean;
+  canTrash: boolean;
+  onTrash: () => Promise<boolean>;
+  onClose: () => void;
+}) {
   const [message, setMessage] = useState<MessageDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
@@ -296,6 +434,18 @@ function MessageReader({ summary, onClose }: { summary: MessageSummary; onClose:
         <button className="reader-back" onClick={onClose}><ArrowLeft size={17} /> <span>Zurück</span></button>
         <div>
           <a className="reader-action" href={`/api/messages/${summary.id}/raw`}><FileDown size={16} /> <span>Original laden</span></a>
+          <button
+            className="reader-action reader-action--danger"
+            disabled={trashing || !canTrash || Boolean(summary.remoteDeletedAt || message?.remoteDeletedAt)}
+            onClick={async () => {
+              if (await onTrash()) {
+                setMessage((current) => current ? { ...current, remoteDeletedAt: new Date().toISOString() } : current);
+              }
+            }}
+          >
+            {trashing ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />}
+            <span>{summary.remoteDeletedAt || message?.remoteDeletedAt ? "Im Papierkorb" : canTrash ? "In Papierkorb" : "Postfach getrennt"}</span>
+          </button>
           <button className="icon-button reader-close" onClick={onClose} aria-label="Nachricht schließen"><X size={19} /></button>
         </div>
       </header>
@@ -330,6 +480,7 @@ function MessageReader({ summary, onClose }: { summary: MessageSummary; onClose:
             </div>
           )}
           <div className="privacy-banner"><ShieldOff size={15} /><span>Externe Bilder und aktive Inhalte wurden zu deiner Privatsphäre blockiert.</span></div>
+          {message.remoteDeletedAt && <div className="remote-deleted-banner"><Trash2 size={15} /><span>Diese Nachricht wurde im verbundenen Postfach in den Papierkorb verschoben. Die lokale Archivkopie bleibt erhalten.</span></div>}
           <div className="email-body">
             {message.html
               ? <div dangerouslySetInnerHTML={{ __html: message.html }} />

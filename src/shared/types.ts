@@ -51,6 +51,7 @@ export interface MessageSummary {
   hasAttachments: boolean;
   attachmentCount: number;
   archivedAt: string;
+  remoteDeletedAt: string | null;
 }
 
 export interface MessageDetail extends MessageSummary {
@@ -116,4 +117,41 @@ export interface ConnectionTestResult {
   ok: boolean;
   serverName: string;
   folders: Array<{ path: string; specialUse: string | null }>;
+}
+
+export type CleanupConditionType = "older_than" | "sender";
+
+export interface CleanupRuleInput {
+  accountId: string;
+  conditionType: CleanupConditionType;
+  olderThanDays?: number;
+  sender?: string;
+  enabled?: boolean;
+}
+
+export interface CleanupRule {
+  id: string;
+  accountId: string;
+  accountName: string;
+  conditionType: CleanupConditionType;
+  olderThanDays: number | null;
+  sender: string | null;
+  enabled: boolean;
+  createdAt: string;
+  lastRunAt: string | null;
+  lastMatchCount: number;
+  lastMovedCount: number;
+  lastError: string | null;
+}
+
+export interface CleanupPreview {
+  count: number;
+  examples: MessageSummary[];
+}
+
+export interface TrashMessagesResult {
+  requested: number;
+  moved: number;
+  movedIds: string[];
+  failed: Array<{ id: string; error: string }>;
 }

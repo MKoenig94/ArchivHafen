@@ -5,6 +5,8 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type {
   Account,
   AccountInput,
+  CleanupRule,
+  CleanupRuleInput,
   DashboardStats,
   Folder,
   MessageAddress,
@@ -46,6 +48,17 @@ export interface MessageRecord extends MessageSummary {
   rawPath: string;
   cc: MessageAddress[];
   messageId: string | null;
+}
+
+export interface RemoteMessageRecord {
+  id: string;
+  accountId: string;
+  folderId: string;
+  folderPath: string;
+  folderSpecialUse: string | null;
+  uidValidity: string;
+  imapUid: number;
+  remoteDeletedAt: string | null;
 }
 
 export class StoreDatabase {
@@ -118,6 +131,7 @@ export class StoreDatabase {
         has_attachments INTEGER NOT NULL DEFAULT 0,
         attachment_count INTEGER NOT NULL DEFAULT 0,
         archived_at TEXT NOT NULL,
+        remote_deleted_at TEXT,
         UNIQUE(folder_id, uid_validity, imap_uid)
       );
 
@@ -150,6 +164,29 @@ export class StoreDatabase {
         finished_at TEXT,
         created_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS cleanup_rules (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        condition_type TEXT NOT NULL CHECK(condition_type IN ('older_than', 'sender')),
+        older_than_days INTEGER,
+        sender TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        last_run_at TEXT,
+        last_match_count INTEGER NOT NULL DEFAULT 0,
+        last_moved_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
+      );
+    `);
+
+    const messageColumns = this.connection.prepare("PRAGMA table_info(messages)").all() as Row[];
+    if (!messageColumns.some((column) => String(column.name) === "remote_deleted_at")) {
+      this.connection.exec("ALTER TABLE messages ADD COLUMN remote_deleted_at TEXT");
+    }
+    this.connection.exec(`
+      CREATE INDEX IF NOT EXISTS messages_remote_deleted_idx ON messages(remote_deleted_at);
+      CREATE INDEX IF NOT EXISTS cleanup_rules_account_idx ON cleanup_rules(account_id);
     `);
   }
 
@@ -240,12 +277,23 @@ export class StoreDatabase {
   }
 
   disconnectAccount(id: string): boolean {
-    const result = this.connection.prepare(`
-      UPDATE accounts
-      SET connected = 0, secret_encrypted = '', status = 'disconnected', last_error = NULL
-      WHERE id = ?
-    `).run(id);
-    return Number(result.changes) > 0;
+    this.connection.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.connection.prepare(`
+        UPDATE accounts
+        SET connected = 0, secret_encrypted = '', status = 'disconnected', last_error = NULL
+        WHERE id = ?
+      `).run(id);
+      const disconnected = Number(result.changes) > 0;
+      if (disconnected) {
+        this.connection.prepare("UPDATE cleanup_rules SET enabled = 0 WHERE account_id = ?").run(id);
+      }
+      this.connection.exec("COMMIT");
+      return disconnected;
+    } catch (error) {
+      this.connection.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   setAccountSyncState(
@@ -433,6 +481,128 @@ export class StoreDatabase {
     };
   }
 
+  getRemoteMessageRecords(ids: string[]): RemoteMessageRecord[] {
+    if (!ids.length) return [];
+    const placeholders = ids.map(() => "?").join(", ");
+    const rows = this.connection.prepare(`
+      SELECT m.id, m.account_id, m.folder_id, m.uid_validity, m.imap_uid,
+        m.remote_deleted_at, f.path AS folder_path, f.special_use AS folder_special_use
+      FROM messages m
+      JOIN folders f ON f.id = m.folder_id
+      WHERE m.id IN (${placeholders})
+    `).all(...ids) as Row[];
+    return rows.map(mapRemoteMessage);
+  }
+
+  markMessagesRemoteDeleted(ids: string[], deletedAt = new Date().toISOString()): void {
+    if (!ids.length) return;
+    const placeholders = ids.map(() => "?").join(", ");
+    this.connection.prepare(`
+      UPDATE messages SET remote_deleted_at = ? WHERE id IN (${placeholders})
+    `).run(deletedAt, ...ids);
+  }
+
+  listCleanupRules(): CleanupRule[] {
+    const rows = this.connection.prepare(`
+      SELECT r.*, a.name AS account_name
+      FROM cleanup_rules r
+      JOIN accounts a ON a.id = r.account_id
+      ORDER BY r.created_at DESC
+    `).all() as Row[];
+    return rows.map(mapCleanupRule);
+  }
+
+  getCleanupRule(id: string): CleanupRule | null {
+    const row = this.connection.prepare(`
+      SELECT r.*, a.name AS account_name
+      FROM cleanup_rules r
+      JOIN accounts a ON a.id = r.account_id
+      WHERE r.id = ?
+    `).get(id) as Row | undefined;
+    return row ? mapCleanupRule(row) : null;
+  }
+
+  createCleanupRule(input: CleanupRuleInput): CleanupRule {
+    const id = randomUUID();
+    this.connection.prepare(`
+      INSERT INTO cleanup_rules (
+        id, account_id, condition_type, older_than_days, sender, enabled, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      input.accountId,
+      input.conditionType,
+      input.conditionType === "older_than" ? input.olderThanDays ?? null : null,
+      input.conditionType === "sender" ? input.sender?.trim().toLowerCase() ?? null : null,
+      input.enabled === false ? 0 : 1,
+      new Date().toISOString(),
+    );
+    return this.getCleanupRule(id)!;
+  }
+
+  setCleanupRuleEnabled(id: string, enabled: boolean): CleanupRule | null {
+    const result = this.connection.prepare(
+      "UPDATE cleanup_rules SET enabled = ? WHERE id = ?",
+    ).run(enabled ? 1 : 0, id);
+    return Number(result.changes) > 0 ? this.getCleanupRule(id) : null;
+  }
+
+  deleteCleanupRule(id: string): boolean {
+    return Number(this.connection.prepare("DELETE FROM cleanup_rules WHERE id = ?").run(id).changes) > 0;
+  }
+
+  countCleanupCandidates(input: CleanupRuleInput): number {
+    const condition = cleanupCondition(input);
+    const row = this.connection.prepare(`
+      SELECT COUNT(*) AS count
+      FROM messages m
+      JOIN folders f ON f.id = m.folder_id
+      WHERE m.account_id = ? AND m.remote_deleted_at IS NULL
+        AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk')
+        AND ${condition.sql}
+    `).get(input.accountId, ...condition.params) as Row;
+    return Number(row.count);
+  }
+
+  listCleanupCandidateSummaries(input: CleanupRuleInput, limit = 5): MessageSummary[] {
+    const condition = cleanupCondition(input);
+    const rows = this.connection.prepare(`
+      SELECT m.*, a.name AS account_name, a.color AS account_color,
+        f.name AS folder_name
+      FROM messages m
+      JOIN accounts a ON a.id = m.account_id
+      JOIN folders f ON f.id = m.folder_id
+      WHERE m.account_id = ? AND m.remote_deleted_at IS NULL
+        AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk')
+        AND ${condition.sql}
+      ORDER BY COALESCE(m.sent_at, m.received_at, m.archived_at) DESC
+      LIMIT ?
+    `).all(input.accountId, ...condition.params, Math.max(1, Math.min(20, limit))) as Row[];
+    return rows.map(mapMessage);
+  }
+
+  listCleanupCandidateRecords(input: CleanupRuleInput): RemoteMessageRecord[] {
+    const condition = cleanupCondition(input);
+    const rows = this.connection.prepare(`
+      SELECT m.id, m.account_id, m.folder_id, m.uid_validity, m.imap_uid,
+        m.remote_deleted_at, f.path AS folder_path, f.special_use AS folder_special_use
+      FROM messages m
+      JOIN folders f ON f.id = m.folder_id
+      WHERE m.account_id = ? AND m.remote_deleted_at IS NULL
+        AND COALESCE(f.special_use, '') NOT IN ('\\Trash', '\\Junk')
+        AND ${condition.sql}
+      ORDER BY COALESCE(m.sent_at, m.received_at, m.archived_at) ASC
+    `).all(input.accountId, ...condition.params) as Row[];
+    return rows.map(mapRemoteMessage);
+  }
+
+  recordCleanupRuleRun(id: string, matchCount: number, movedCount: number, error: string | null): void {
+    this.connection.prepare(`
+      UPDATE cleanup_rules SET last_run_at = ?, last_match_count = ?,
+        last_moved_count = ?, last_error = ? WHERE id = ?
+    `).run(new Date().toISOString(), matchCount, movedCount, error, id);
+  }
+
   createJob(accountId: string | null): SyncJob {
     const id = randomUUID();
     const createdAt = new Date().toISOString();
@@ -554,6 +724,39 @@ function mapMessage(row: Row): MessageSummary {
     hasAttachments: Boolean(row.has_attachments),
     attachmentCount: Number(row.attachment_count),
     archivedAt: String(row.archived_at),
+    remoteDeletedAt: row.remote_deleted_at === null || row.remote_deleted_at === undefined
+      ? null
+      : String(row.remote_deleted_at),
+  };
+}
+
+function mapRemoteMessage(row: Row): RemoteMessageRecord {
+  return {
+    id: String(row.id),
+    accountId: String(row.account_id),
+    folderId: String(row.folder_id),
+    folderPath: String(row.folder_path),
+    folderSpecialUse: row.folder_special_use === null ? null : String(row.folder_special_use),
+    uidValidity: String(row.uid_validity),
+    imapUid: Number(row.imap_uid),
+    remoteDeletedAt: row.remote_deleted_at === null ? null : String(row.remote_deleted_at),
+  };
+}
+
+function mapCleanupRule(row: Row): CleanupRule {
+  return {
+    id: String(row.id),
+    accountId: String(row.account_id),
+    accountName: String(row.account_name),
+    conditionType: String(row.condition_type) as CleanupRule["conditionType"],
+    olderThanDays: row.older_than_days === null ? null : Number(row.older_than_days),
+    sender: row.sender === null ? null : String(row.sender),
+    enabled: Boolean(row.enabled),
+    createdAt: String(row.created_at),
+    lastRunAt: row.last_run_at === null ? null : String(row.last_run_at),
+    lastMatchCount: Number(row.last_match_count),
+    lastMovedCount: Number(row.last_moved_count),
+    lastError: row.last_error === null ? null : String(row.last_error),
   };
 }
 
@@ -599,6 +802,21 @@ function toFtsQuery(value: string): string {
     .filter(Boolean)
     .map((part) => `"${part}"*`)
     .join(" AND ");
+}
+
+function cleanupCondition(input: CleanupRuleInput): { sql: string; params: SQLInputValue[] } {
+  if (input.conditionType === "older_than") {
+    const days = Math.max(1, Math.trunc(input.olderThanDays ?? 1));
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+    return {
+      sql: "COALESCE(m.sent_at, m.received_at, m.archived_at) < ?",
+      params: [cutoff],
+    };
+  }
+  return {
+    sql: "LOWER(m.sender_email) = ?",
+    params: [input.sender?.trim().toLowerCase() ?? ""],
+  };
 }
 
 function accountColor(value: string): string {

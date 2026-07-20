@@ -8,7 +8,7 @@ const SKIPPED_SPECIAL_FOLDERS = new Set(["\\Trash", "\\Junk"]);
 const FETCH_BATCH_SIZE = 40;
 
 export async function testImapConnection(input: AccountInput): Promise<ConnectionTestResult> {
-  const client = createClient({
+  const client = createImapClient({
     host: input.imapHost,
     port: input.imapPort,
     secure: input.imapSecure,
@@ -27,19 +27,28 @@ export async function testImapConnection(input: AccountInput): Promise<Connectio
         .map((folder) => ({ path: folder.path, specialUse: folder.specialUse ?? null })),
     };
   } finally {
-    await closeClient(client);
+    await closeImapClient(client);
   }
 }
 
 export class SyncManager {
   private queue: Promise<void> = Promise.resolve();
   private readonly activeByAccount = new Map<string, string>();
+  private afterSuccessfulSync: ((accountId: string) => void) | null = null;
 
   constructor(
     private readonly database: StoreDatabase,
     private readonly vault: CredentialVault,
     private readonly archive: ArchiveService,
   ) {}
+
+  setAfterSuccessfulSync(callback: (accountId: string) => void): void {
+    this.afterSuccessfulSync = callback;
+  }
+
+  isActive(accountId: string): boolean {
+    return this.activeByAccount.has(accountId);
+  }
 
   start(accountId: string): SyncJob {
     const activeId = this.activeByAccount.get(accountId);
@@ -48,11 +57,13 @@ export class SyncManager {
     const job = this.database.createJob(accountId);
     this.activeByAccount.set(accountId, job.id);
     const run = async () => {
+      let completed = false;
       try {
-        await this.syncAccount(job.id, accountId);
+        completed = await this.syncAccount(job.id, accountId);
       } finally {
         this.activeByAccount.delete(accountId);
       }
+      if (completed) this.afterSuccessfulSync?.(accountId);
     };
     this.queue = this.queue.then(run, run);
     return job;
@@ -62,7 +73,7 @@ export class SyncManager {
     return this.database.listAccounts(false).map((account) => this.start(account.id));
   }
 
-  private async syncAccount(jobId: string, accountId: string): Promise<void> {
+  private async syncAccount(jobId: string, accountId: string): Promise<boolean> {
     const account = this.database.getAccountRecord(accountId);
     const now = new Date().toISOString();
     if (!account || !account.connected || !account.secretEncrypted) {
@@ -73,7 +84,7 @@ export class SyncManager {
         startedAt: now,
         finishedAt: now,
       });
-      return;
+      return false;
     }
 
     this.database.updateJob(jobId, {
@@ -83,7 +94,7 @@ export class SyncManager {
     });
     this.database.setAccountSyncState(accountId, { status: "syncing" });
 
-    const client = createClient({
+    const client = createImapClient({
       host: account.imapHost,
       port: account.imapPort,
       secure: account.imapSecure,
@@ -178,6 +189,7 @@ export class SyncManager {
         added,
         finishedAt: new Date().toISOString(),
       });
+      return true;
     } catch (error) {
       const message = friendlyImapError(error);
       this.database.setAccountSyncState(accountId, { status: "error", error: message });
@@ -190,13 +202,14 @@ export class SyncManager {
         error: message,
         finishedAt: new Date().toISOString(),
       });
+      return false;
     } finally {
-      await closeClient(client);
+      await closeImapClient(client);
     }
   }
 }
 
-function createClient(input: {
+export function createImapClient(input: {
   host: string;
   port: number;
   secure: boolean;
@@ -216,7 +229,7 @@ function createClient(input: {
     maxLiteralSize: 150 * 1024 * 1024,
     clientInfo: {
       name: "Archiv Hafen",
-      version: "0.1.0",
+      version: "0.2.0",
       vendor: "Local-first",
     },
   });
@@ -230,7 +243,7 @@ function isArchivableFolder(folder: ListResponse): boolean {
   return isSelectableFolder(folder) && !SKIPPED_SPECIAL_FOLDERS.has(folder.specialUse ?? "");
 }
 
-async function closeClient(client: ImapFlow): Promise<void> {
+export async function closeImapClient(client: ImapFlow): Promise<void> {
   try {
     if (client.usable) await client.logout();
     else client.close();

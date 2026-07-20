@@ -4,10 +4,11 @@ import express, { type NextFunction, type Request, type Response } from "express
 import helmet from "helmet";
 import sanitizeHtml from "sanitize-html";
 import { z, ZodError } from "zod";
-import type { AccountInput, ProviderId } from "../shared/types.js";
+import type { AccountInput, CleanupRuleInput, ProviderId } from "../shared/types.js";
 import type { StoreDatabase } from "./database.js";
 import type { CredentialVault } from "./crypto.js";
 import type { ArchiveService } from "./services/archive.js";
+import { CleanupRequestError, type CleanupManager } from "./services/cleanup.js";
 import { friendlyImapError, type SyncManager, testImapConnection } from "./services/imap.js";
 
 interface Services {
@@ -15,6 +16,7 @@ interface Services {
   vault: CredentialVault;
   archive: ArchiveService;
   sync: SyncManager;
+  cleanup: CleanupManager;
   dataDirectory: string;
   production?: boolean;
 }
@@ -32,6 +34,23 @@ const accountSchema = z.object({
 });
 
 const idSchema = z.string().uuid();
+const cleanupRuleSchema = z.discriminatedUnion("conditionType", [
+  z.object({
+    accountId: idSchema,
+    conditionType: z.literal("older_than"),
+    olderThanDays: z.coerce.number().int().min(1).max(36_500),
+    enabled: z.boolean().optional(),
+  }),
+  z.object({
+    accountId: idSchema,
+    conditionType: z.literal("sender"),
+    sender: z.string().trim().email().max(254).transform((value) => value.toLowerCase()),
+    enabled: z.boolean().optional(),
+  }),
+]);
+const trashMessagesSchema = z.object({
+  ids: z.array(idSchema).min(1).max(100),
+});
 
 export function createApp(services: Services) {
   const app = express();
@@ -116,6 +135,52 @@ export function createApp(services: Services) {
     response.json(job);
   });
 
+  app.get("/api/cleanup-rules", (_request, response) => {
+    response.json(services.database.listCleanupRules());
+  });
+
+  app.post("/api/cleanup-rules/preview", (request, response) => {
+    const input = cleanupRuleSchema.parse(request.body) as CleanupRuleInput;
+    const account = services.database.getAccount(input.accountId);
+    if (!account) return response.status(404).json({ error: "Postfach nicht gefunden." });
+    response.json(services.cleanup.preview(input));
+  });
+
+  app.post("/api/cleanup-rules", (request, response) => {
+    const input = cleanupRuleSchema.parse(request.body) as CleanupRuleInput;
+    const account = services.database.getAccount(input.accountId);
+    if (!account) return response.status(404).json({ error: "Postfach nicht gefunden." });
+    if (!account.connected) return response.status(409).json({ error: "Postfach ist nicht verbunden." });
+    response.status(201).json(services.database.createCleanupRule(input));
+  });
+
+  app.patch("/api/cleanup-rules/:id", (request, response) => {
+    const id = idSchema.parse(request.params.id);
+    const { enabled } = z.object({ enabled: z.boolean() }).parse(request.body);
+    if (services.cleanup.isRuleActive(id)) {
+      return response.status(409).json({ error: "Die Regel läuft gerade. Bitte versuche es danach erneut." });
+    }
+    const rule = services.database.setCleanupRuleEnabled(id, enabled);
+    if (!rule) return response.status(404).json({ error: "Regel nicht gefunden." });
+    response.json(rule);
+  });
+
+  app.delete("/api/cleanup-rules/:id", (request, response) => {
+    const id = idSchema.parse(request.params.id);
+    if (services.cleanup.isRuleActive(id)) {
+      return response.status(409).json({ error: "Die Regel läuft gerade. Bitte versuche es danach erneut." });
+    }
+    if (!services.database.deleteCleanupRule(id)) {
+      return response.status(404).json({ error: "Regel nicht gefunden." });
+    }
+    response.status(204).end();
+  });
+
+  app.post("/api/cleanup-rules/:id/run", async (request, response) => {
+    const id = idSchema.parse(request.params.id);
+    response.json(await services.cleanup.runRule(id));
+  });
+
   app.get("/api/messages", (request, response) => {
     const page = numberQuery(request.query.page, 1);
     const pageSize = numberQuery(request.query.pageSize, 40);
@@ -126,6 +191,11 @@ export function createApp(services: Services) {
     response.json(services.database.listMessages({
       page, pageSize, query, accountId, folderId, attachmentsOnly,
     }));
+  });
+
+  app.post("/api/messages/trash", async (request, response) => {
+    const { ids } = trashMessagesSchema.parse(request.body);
+    response.json(await services.cleanup.trashMessages(ids));
   });
 
   app.get("/api/messages/:id", async (request, response) => {
@@ -177,6 +247,9 @@ export function createApp(services: Services) {
         error: "Die Eingaben sind unvollständig oder ungültig.",
         fields: error.flatten().fieldErrors,
       });
+    }
+    if (error instanceof CleanupRequestError) {
+      return response.status(error.status).json({ error: error.message });
     }
     console.error(error);
     response.status(500).json({ error: "Interner Fehler. Details stehen im Serverprotokoll." });

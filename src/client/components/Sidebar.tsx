@@ -4,6 +4,7 @@ import {
   HardDrive,
   Inbox,
   LayoutDashboard,
+  ListChecks,
   Menu,
   Plus,
   Settings,
@@ -12,7 +13,7 @@ import {
 import type { Account } from "../../shared/types";
 import { initials } from "../lib/format";
 
-export type ViewName = "dashboard" | "archive" | "accounts" | "settings";
+export type ViewName = "dashboard" | "archive" | "accounts" | "rules" | "settings";
 
 interface SidebarProps {
   view: ViewName;
@@ -27,6 +28,7 @@ const navigation = [
   { id: "dashboard" as const, label: "Übersicht", icon: LayoutDashboard },
   { id: "archive" as const, label: "Archiv", icon: Inbox },
   { id: "accounts" as const, label: "Postfächer", icon: Boxes },
+  { id: "rules" as const, label: "Regeln", icon: ListChecks },
 ];
 
 export function Sidebar({

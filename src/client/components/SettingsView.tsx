@@ -81,7 +81,7 @@ export function SettingsView({ stats }: { stats: DashboardStats | null }) {
           </div>
           <div className="version-card">
             <span className="brand-mark small"><Archive size={16} /></span>
-            <div><strong>Archiv Hafen für Linux</strong><span>Version 0.1.0</span></div>
+            <div><strong>Archiv Hafen für Linux</strong><span>Version 0.2.0</span></div>
             <span className="local-version">LOCAL</span>
           </div>
         </aside>

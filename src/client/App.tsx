@@ -4,6 +4,7 @@ import type { Account, DashboardStats, SyncJob } from "../shared/types";
 import { AccountsView } from "./components/AccountsView";
 import { AddAccountModal } from "./components/AddAccountModal";
 import { ArchiveView } from "./components/ArchiveView";
+import { CleanupRulesView } from "./components/CleanupRulesView";
 import { DashboardView } from "./components/DashboardView";
 import { SettingsView } from "./components/SettingsView";
 import { MobileHeader, Sidebar, type ViewName } from "./components/Sidebar";
@@ -97,7 +98,10 @@ export function App() {
           onNavigate={setView}
         />;
       case "archive":
-        return <ArchiveView accounts={accounts} />;
+        return <ArchiveView
+          accounts={accounts}
+          onNotify={(type, message) => setToast({ type, message })}
+        />;
       case "accounts":
         return <AccountsView
           accounts={accounts}
@@ -105,6 +109,11 @@ export function App() {
           onAdd={openAddAccount}
           onReconnect={openReconnect}
           onRefresh={refresh}
+          onNotify={(type, message) => setToast({ type, message })}
+        />;
+      case "rules":
+        return <CleanupRulesView
+          accounts={accounts}
           onNotify={(type, message) => setToast({ type, message })}
         />;
       case "settings":

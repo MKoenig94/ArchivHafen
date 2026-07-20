@@ -11,13 +11,16 @@ Archiv Hafen ist ein lokales, selbst gehostetes E-Mail-Archiv für Linux. Es ver
 - Originale RFC-822-Nachrichten inklusive Headern und Anhängen
 - Volltextsuche über Betreff, Absender, Empfänger und Nachrichtentext
 - Filter nach Postfach, Ordner und Anhängen
+- Einzelne oder mehrere archivierte Nachrichten im Anbieter-Postfach in den Papierkorb verschieben
+- Bereinigungsregeln für Nachrichten älter als X Tage oder von einer exakten Absenderadresse
+- Treffer-Vorschau und Bestätigung vor dem Aktivieren oder manuellen Ausführen einer Regel
 - Download einzelner Anhänge oder der unveränderten `.eml`-Datei
 - Deduplizierung identischer Nachrichten innerhalb eines Postfachs
 - AES-256-GCM-verschlüsselte Zugangsdaten mit lokalem Schlüssel
 - Datenschutzfreundliche Leseransicht ohne externe Bilder oder aktive Inhalte
 - Trennen eines Postfachs ohne Löschen des vorhandenen Archivs
 
-Papierkorb und Spam werden bewusst nicht synchronisiert. Archiv Hafen greift ausschließlich lesend per IMAP auf die Postfächer zu.
+Papierkorb und Spam werden bewusst nicht synchronisiert. Die Archivierung greift ausschließlich lesend auf die Postfächer zu. Nur eine ausdrücklich bestätigte Auswahl oder eine aktivierte Bereinigungsregel darf Nachrichten per IMAP in den Papierkorb des Anbieters verschieben; die lokale Archivkopie wird dabei nicht gelöscht.
 
 ## Docker Compose
 
@@ -103,6 +106,21 @@ Archiv Hafen verwendet die klassische IMAP-Anmeldung. Bei Gmail und iCloud muss 
 
 Beim ersten Lauf werden alle auswählbaren Ordner außer Spam und Papierkorb archiviert. Folgeläufe laden ausschließlich neue UIDs. Ändert ein Server seine UIDVALIDITY, prüft Archiv Hafen den Ordner erneut und verhindert doppelte Archivdateien über SHA-256.
 
+## Nachrichten im Anbieter-Postfach bereinigen
+
+Im Archiv kann eine Nachricht über die Leseransicht oder per Checkbox ausgewählt werden. Die Mehrfachauswahl wirkt auf alle aktuell geladenen Treffer. Vor dem Verschieben zeigt Archiv Hafen immer eine Bestätigung an. Die Nachricht wird ausschließlich in den IMAP-Papierkorb des verbundenen Anbieters verschoben und bleibt als unveränderte `.eml`-Datei im lokalen Archiv erhalten.
+
+Unter **Regeln** lassen sich zwei Bedingungen anlegen:
+
+- Nachrichten älter als eine festgelegte Zahl von Tagen
+- Nachrichten von einer exakten Absenderadresse
+
+Vor dem Aktivieren zeigt eine Vorschau die aktuelle Trefferzahl und einige Beispiele. Eine aktivierte Regel läuft nach jeder erfolgreichen Archivierung. Sie kann pausiert, erneut mit Vorschau aktiviert oder nach einer weiteren Bestätigung sofort ausgeführt werden. Archiv Hafen führt dabei keine endgültige Löschung und kein Leeren des Papierkorbs aus.
+
+Beim Trennen eines Postfachs werden dessen Regeln automatisch pausiert. Nach dem erneuten Verbinden müssen sie mit einer aktuellen Vorschau bewusst wieder aktiviert werden.
+
+Der IMAP-Server muss einen auswählbaren Ordner mit der Spezialkennzeichnung `\Trash` melden. Fehlt diese eindeutige Kennzeichnung oder hat sich die UIDVALIDITY eines Quellordners geändert, bricht Archiv Hafen für die betroffenen Nachrichten sicher ab und fordert zuerst eine neue Synchronisierung an.
+
 ## Daten und Backups
 
 Standardmäßig folgt Archiv Hafen der XDG-Konvention und speichert unter:
@@ -144,7 +162,7 @@ npm test
 npm run build
 ```
 
-Die Tests decken die authentifizierte Verschlüsselung, unveränderte EML-Ablage, Volltextindexierung, Anhangserkennung, Deduplizierung und den Erhalt des Archivs nach dem Trennen eines Kontos ab.
+Die Tests decken die authentifizierte Verschlüsselung, unveränderte EML-Ablage, Volltextindexierung, Anhangserkennung, Deduplizierung, Datenbankmigration sowie die sichere IMAP-Papierkorbverschiebung mit erhaltenem Lokalarchiv ab.
 
 ## Lizenz
 

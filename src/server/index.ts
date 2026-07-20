@@ -4,6 +4,7 @@ import { config, resolveDatabasePath } from "./config.js";
 import { CredentialVault } from "./crypto.js";
 import { StoreDatabase } from "./database.js";
 import { ArchiveService } from "./services/archive.js";
+import { CleanupManager } from "./services/cleanup.js";
 import { SyncManager } from "./services/imap.js";
 
 fs.mkdirSync(config.dataDirectory, { recursive: true, mode: 0o700 });
@@ -11,11 +12,14 @@ const database = new StoreDatabase(resolveDatabasePath(config.dataDirectory));
 const vault = new CredentialVault(config.dataDirectory);
 const archive = new ArchiveService(config.dataDirectory, database);
 const sync = new SyncManager(database, vault, archive);
+const cleanup = new CleanupManager(database, vault, (accountId) => sync.isActive(accountId));
+sync.setAfterSuccessfulSync((accountId) => cleanup.runEnabledForAccount(accountId));
 const app = createApp({
   database,
   vault,
   archive,
   sync,
+  cleanup,
   dataDirectory: config.dataDirectory,
   production: config.isProduction,
 });

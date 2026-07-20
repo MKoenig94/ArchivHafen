@@ -1,12 +1,16 @@
 import type {
   Account,
   AccountInput,
+  CleanupPreview,
+  CleanupRule,
+  CleanupRuleInput,
   ConnectionTestResult,
   DashboardStats,
   Folder,
   MessageDetail,
   MessagePage,
   SyncJob,
+  TrashMessagesResult,
 } from "../../shared/types";
 
 export class ApiError extends Error {
@@ -61,6 +65,27 @@ export const api = {
     return request<MessagePage>(`/api/messages?${query}`);
   },
   message: (id: string) => request<MessageDetail>(`/api/messages/${id}`),
+  trashMessages: (ids: string[]) => request<TrashMessagesResult>("/api/messages/trash", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  }),
+  cleanupRules: () => request<CleanupRule[]>("/api/cleanup-rules"),
+  previewCleanupRule: (input: CleanupRuleInput) => request<CleanupPreview>("/api/cleanup-rules/preview", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }),
+  createCleanupRule: (input: CleanupRuleInput) => request<CleanupRule>("/api/cleanup-rules", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }),
+  setCleanupRuleEnabled: (id: string, enabled: boolean) => request<CleanupRule>(`/api/cleanup-rules/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled }),
+  }),
+  deleteCleanupRule: (id: string) => request<void>(`/api/cleanup-rules/${id}`, { method: "DELETE" }),
+  runCleanupRule: (id: string) => request<TrashMessagesResult>(`/api/cleanup-rules/${id}/run`, {
+    method: "POST",
+  }),
   testAccount: (input: AccountInput) => request<ConnectionTestResult>("/api/accounts/test", {
     method: "POST",
     body: JSON.stringify(input),
